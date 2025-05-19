@@ -1,0 +1,37 @@
+# Folder and files to ignore
+logs/
+wandb/
+model archive/
+radiation_data_bfs_sim/
+misc/radiation_data_bfs_simulation/
+misc/radiation_data/simulated/
+git_clones/
+visualize_sim_with_random_actions.ipynb
+visualize_last_env_state_in_cluster.ipynb
+visualize_trained_model.ipynb
+visualize_model_performance.ipynb
+z_test.ipynb
+ODL.cst
+ODL.dbf
+ODL.prj
+ODL.shp
+ODL.shx
+test_3d_world.ipynb
+test_shp.ipynb
+grid_map.html
+misc/html_data/
+misc/sandbox/
+misc/random_actions_3d/
+misc/tools
+height_data_berlin.npy
+height_data.npy
+misc/3d_vis_archive/offline/
+misc/geo_data/files_npy/
+misc/html_data.zip
+html_data/
+__pycache__/
+misc/__pycache__/
+misc/geo_data/downloads_from_opentopography/
+misc/radiation_data/git_ignored/
+runs/
+z_start_sweep_cluster.py

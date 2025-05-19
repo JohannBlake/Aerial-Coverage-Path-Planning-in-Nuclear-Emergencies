@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Map Visualization</title>
+  <script src="https://unpkg.com/deck.gl@latest/dist.min.js"></script>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Fira Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+      background: #181c1f;
+      color: #e0e0e0;
+    }
+    #deck-container {
+      width: 100vw;
+      height: 100vh;
+    }
+    #map-style-controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 101;
+      background: none;
+      padding: 0;
+      border-radius: 0;
+      box-shadow: none;
+      border: none;
+    }
+
+    /* --- Cool minimal button & select styles --- */
+    .cool-btn {
+      background: linear-gradient(90deg, #232526 0%, #414345 100%);
+      color: #00ff99;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 18px;
+      font-size: 1rem;
+      font-family: 'Fira Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(30,30,30,0.10);
+      transition: background 0.2s, box-shadow 0.2s, transform 0.1s;
+      outline: none;
+      margin-right: 8px;
+      margin-bottom: 4px;
+      min-width: 110px;
+      text-shadow: 0 1px 2px #000a;
+    }
+    .cool-btn:last-child {
+      margin-right: 0;
+    }
+    .cool-btn:hover, .cool-btn:focus {
+      background: linear-gradient(90deg, #414345 0%, #232526 100%);
+      box-shadow: 0 4px 16px rgba(30,255,100,0.10);
+      color: #fff;
+      transform: translateY(-1px) scale(1.03);
+    }
+
+    .cool-select {
+      background: #232526;
+      color: #00ff99;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-size: 1rem;
+      font-family: 'Fira Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(30,30,30,0.10);
+      transition: background 0.2s, box-shadow 0.2s;
+      outline: none;
+      appearance: none;
+      min-width: 120px;
+      text-shadow: 0 1px 2px #000a;
+    }
+    .cool-select:focus, .cool-select:hover {
+      background: #414345;
+      box-shadow: 0 4px 16px rgba(30,255,100,0.10);
+      color: #fff;
+    }
+
+    #polygon-controls, #map-style-controls {
+      box-shadow: 0 2px 12px rgba(20,30,40,0.10);
+      border: none;
+      font-family: 'Fira Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+    }
+  </style>
+  <!-- Fira Mono font from Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="deck-container"></div>
+  <div id="polygon-controls" style="position:absolute;top:10px;left:10px;z-index:100;background:rgba(24,28,31,0.92);padding:10px;border-radius:4px;box-shadow:0 2px 12px rgba(20,30,40,0.10);border:none;">
+    <button id="finishPolygonBtn" class="cool-btn">Finish Polygon</button>
+    <button id="resetPolygonBtn" class="cool-btn">Reset</button>
+  </div>
+  <div id="map-style-controls" style="background:rgba(24,28,31,0.2);">
+    <select id="mapStyleSelect" class="cool-select">
+      <option value="streets-v12">Streets</option>
+      <option value="satellite-v9">Satellite</option>
+    </select>
+  </div>
+  <script>
+    const container = document.getElementById('deck-container');
+
+    // Mapbox access token
+    const MAPBOX_TOKEN = window.MAPBOX_TOKEN;
+
+    // Mapbox style id to human label mapping (for reference)
+    const MAPBOX_STYLES = {
+      'satellite-v9': 'Satellite',
+      'streets-v12': 'Streets'
+    };
+
+    let currentMapStyle = 'streets-v12';
+
+    function getTextureUrl(style) {
+      // Mapbox style id, e.g. 'satellite-v9', 'streets-v12'
+      return `https://api.mapbox.com/styles/v1/mapbox/${style}/tiles/256/{z}/{x}/{y}@2x?access_token=${MAPBOX_TOKEN}`;
+    }
+
+    // TerrainLayer instance, will be replaced on style change
+    let terrainLayer = new deck.TerrainLayer({
+      id: 'terrain-layer',
+      elevationData: `https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw?access_token=${MAPBOX_TOKEN}`,
+      texture: getTextureUrl(currentMapStyle),
+      elevationDecoder: {
+        rScaler: 256 * 256 * 0.1,
+        gScaler: 256 * 0.1,
+        bScaler: 0.1,
+        offset: -10000
+      },
+      maxZoom: 19,
+      operation: 'terrain+draw'
+    });
+
+    const pathLayer = new deck.PathLayer({
+      id: 'path-layer',
+      data: [],
+      getPath: d => Array.isArray(d.path) ? d.path.slice(-30) : [],
+      getColor: [200,161,200, 180],
+      widthMinPixels: 3
+    });
+
+    const predictedPathFirstLayer = new deck.PathLayer({
+      id: 'predicted-path-first-layer',
+      data: [],
+      getPath: d => d.path,
+      getColor: [0,197,255,100],    // first segment color
+      widthMinPixels: 5,
+      extensions: [ new deck._TerrainExtension({ terrainDrawMode: 'drape' }) ]
+    });
+    const predictedPathSecondLayer = new deck.PathLayer({
+      id: 'predicted-path-second-layer',
+      data: [],
+      getPath: d => d.path,
+      getColor: [175,255,250],    // second segment color
+      widthMinPixels: 10,
+      extensions: [ new deck._TerrainExtension({ terrainDrawMode: 'drape' }) ]
+    });
+
+    const targetAreaLayer = new deck.GeoJsonLayer({
+      id: 'target-area-layer',
+      data: {},
+      getFillColor: [255, 255, 255, 60],
+      getLineColor: [133,133, 133],
+      getLineWidth: 15,
+      stroked: true,
+      filled: true,
+      lineWidthMinPixels: 1,
+      extensions: [
+                    new deck._TerrainExtension({
+                      terrainDrawMode: 'drape'
+                    })
+                  ]
+    });
+
+    // Replace ScatterplotLayer with PointCloudLayer for the current position marker
+    const currentPositionLayer = new deck.PointCloudLayer({
+      id: 'current-position-layer',
+      data: [],
+      getPosition: d => d.position,
+      getColor: [0,255,255, 255],
+      pointSize: 6,
+      pickable: false,
+      parameters: { depthTest: false }
+    });
+
+    // --- Red dot for heli position_as_geo_coordinate (height 200) ---
+    let heliPositionData = [];
+    const heliPositionLayer = new deck.ScatterplotLayer({
+      id: 'heli-position-layer',
+      data: heliPositionData,
+      getPosition: d => d.position,
+      getFillColor: [255, 0, 0, 255],
+      radiusPixels: 10,
+      pickable: false,
+      parameters: { depthTest: false }
+    });
+
+    let deckGL;
+    let cameraFollow = true;
+    let currentViewState = null;
+    let previousViewState = null;
+    let how_many_steps_to_predict = 1; // default, will be updated from backend
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'c' || e.key === 'C') {
+        cameraFollow = !cameraFollow;
+        showCameraFollowStatus();
+      } else if (e.key === 'v' || e.key === 'V') {
+          previousViewState = currentViewState;
+          currentViewState = { ...currentViewState, pitch: 0 };
+        deckGL.setProps({ viewState: currentViewState });
+      }
+    });
+
+    // Helper to get initial view state from deckGL or fallback
+    function getInitialViewState() {
+      if (currentViewState) return currentViewState;
+      if (deckGL && deckGL.props && deckGL.props.initialViewState) return deckGL.props.initialViewState;
+      return {longitude:  13.537598150601644, latitude: 52.48336705990558, zoom: 13, pitch: 0, bearing: 0};
+    }
+
+    // --- Interactive Polygon Drawing State ---
+    let polygonPoints = [];
+    let drawingLocked = false;
+
+    function getPolygonScatterLayer() {
+      return new deck.ScatterplotLayer({
+        id: 'polygon-scatter-layer',
+        data: polygonPoints,
+        getPosition: d => d,
+        getFillColor: [255, 0, 0],
+        radiusPixels: 5,
+        pickable: false
+      });
+    }
+
+    function getPolygonLayer() {
+      // Show polygon as soon as 3 points are picked, close the ring
+      const ring = polygonPoints.length >= 3 ? [...polygonPoints, polygonPoints[0]] : [];
+      return new deck.PolygonLayer({
+        id: 'polygon-layer',
+        data: ring.length ? [{ polygon: ring }] : [],
+        getPolygon: d => d.polygon,
+        getFillColor: [255, 255, 255, 60],
+        getLineColor: [133,133, 133],
+        getLineWidth: 15,
+        stroked: true,
+        filled: true,
+        lineWidthMinPixels: 1,
+        extensions: [
+                      new deck._TerrainExtension({
+                        terrainDrawMode: 'drape'
+                      })
+                    ]
+      });
+    }
+
+    function getInteractionLayers() {
+      const layers = [getPolygonScatterLayer()];
+      if (polygonPoints.length >= 3) layers.push(getPolygonLayer());
+      return layers;
+    }
+
+    function updateInteractionLayers(baseLayers) {
+      // Remove any previous polygon layers
+      const filtered = baseLayers.filter(l =>
+        l.id !== 'polygon-scatter-layer' && l.id !== 'polygon-layer'
+      );
+      return [...filtered, ...getInteractionLayers()];
+    }
+
+    function updateAllLayers(customLayers = {}) {
+      // Helper to update all layers, including the heli red dot
+      deckGL.setProps({
+        layers: updateInteractionLayers([
+          terrainLayer,
+          customLayers.pathLayer || pathLayer,
+          customLayers.predictedPathFirstLayer || predictedPathFirstLayer,
+          customLayers.predictedPathSecondLayer || predictedPathSecondLayer,
+          customLayers.targetAreaLayer || targetAreaLayer,
+          customLayers.currentPositionLayer || currentPositionLayer,
+          heliPositionLayer.clone({ data: heliPositionData })
+        ])
+      });
+    }
+
+    // --- DeckGL initialization ---
+    function initializeDeckGL(center) {
+      const initialViewState = center
+        ? {
+            longitude: center.centerLongitude,
+            latitude: center.centerLatitude,
+            zoom: 13,
+            pitch: 0,
+            bearing: 0
+          }
+        : getInitialViewState();
+
+      deckGL = new deck.DeckGL({
+        container,
+        initialViewState,
+        controller: {maxPitch: 90},
+        layers: [
+          terrainLayer,
+          pathLayer,
+          predictedPathFirstLayer,
+          predictedPathSecondLayer,
+          targetAreaLayer,
+          currentPositionLayer,
+          heliPositionLayer
+        ],
+        viewState: currentViewState || initialViewState,
+        onViewStateChange: ({viewState}) => {
+          currentViewState = viewState;
+          deckGL.setProps({viewState});
+        },
+        onClick: info => {
+          if (!drawingLocked && info.coordinate) {
+            polygonPoints.push(info.coordinate);
+            deckGL.setProps({
+              layers: updateInteractionLayers(deckGL.props.layers)
+            });
+          }
+        }
+      });
+      currentViewState = initialViewState;
+    }
+
+    fetch('center_coordinates.json')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Failed to load center coordinates');
+        }
+        return response.json();
+      })
+      .then(center => {
+        initializeDeckGL(center);
+        checkExistingPolygon();
+      })
+      .catch(error => {
+        console.error('Error loading center coordinates:', error);
+        initializeDeckGL(null);
+        checkExistingPolygon();
+      });
+
+    async function fetchData() {
+      try {
+        const response = await fetch('http://127.0.0.1:5000/data');
+        const data = await response.json();
+        // Update how_many_steps_to_predict from backend if present
+        if (typeof data.how_many_steps_to_predict === 'number') {
+          how_many_steps_to_predict = data.how_many_steps_to_predict;
+        }
+        const updatedPathLayer = pathLayer.clone({ data: data.path });
+        const { firstData, secondData } = splitPredicted(data.predicted_path || []);
+        const updatedPredictedFirstLayer  = predictedPathFirstLayer.clone({  data: firstData  });
+        const updatedPredictedSecondLayer = predictedPathSecondLayer.clone({ data: secondData });
+        const updatedTargetAreaLayer = targetAreaLayer.clone({ data: data.target_area && data.target_area.geometry ? data.target_area : {} });
+        const updatedCurrentPositionLayer = currentPositionLayer.clone({ data: getCurrentPositionData(data.path) });
+        deckGL.setProps({
+          layers: updateInteractionLayers([
+            terrainLayer,
+            updatedPathLayer,
+            updatedPredictedFirstLayer,
+            updatedPredictedSecondLayer,
+            updatedTargetAreaLayer,
+            updatedCurrentPositionLayer
+          ])
+        });
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      }
+    }
+
+    function getCurrentPositionData(path) {
+      // path: array of {path: [[lon,lat,h], ...]}
+      if (Array.isArray(path) && path.length > 0) {
+        const lastPathObj = path[path.length - 1];
+        if (lastPathObj && Array.isArray(lastPathObj.path) && lastPathObj.path.length > 0) {
+          const newestPoint = lastPathObj.path[lastPathObj.path.length - 1];
+          if (Array.isArray(newestPoint) && newestPoint.length >= 3) {
+            // Use the actual height from the path point
+            return [{position: [newestPoint[0], newestPoint[1], newestPoint[2]]}];
+          }
+        }
+      }
+      return [];
+    }
+
+    // helper to split predicted path into two arrays
+    function splitPredicted(predicted) {
+      const firstData = [], secondData = [];
+      if (Array.isArray(predicted)) {
+        predicted.forEach(d => {
+          const pts = Array.isArray(d.path) ? d.path : [];
+          const idx = Math.max(pts.length - how_many_steps_to_predict, 0);
+          firstData.push({ path: pts.slice(0, idx) });
+          secondData.push({ path: pts.slice(idx-1) });
+        });
+      }
+      return { firstData, secondData };
+    }
+
+    const socket = io('http://127.0.0.1:5000');
+    socket.on('data_updated', (data) => {
+      const updatedPathLayer = pathLayer.clone({ data: data.path });
+      const updatedCurrentPositionLayer = currentPositionLayer.clone({ data: getCurrentPositionData(data.path) });
+      // Center map at newest position if path is non-empty and cameraFollow is enabled
+      let newViewState = null;
+      if (cameraFollow && Array.isArray(data.path) && data.path.length > 0) {
+        const lastPathObj = data.path[data.path.length - 1];
+        if (lastPathObj && Array.isArray(lastPathObj.path) && lastPathObj.path.length > 0) {
+          const newestPoint = lastPathObj.path[lastPathObj.path.length - 1];
+          // Calculate bearing using current and 4 steps ago if possible
+          let bearing = currentViewState?.bearing || deckGL.props.initialViewState.bearing;
+          if (lastPathObj.path.length > 4) {
+            const prevPoint = lastPathObj.path[lastPathObj.path.length - 5];
+            if (Array.isArray(prevPoint) && prevPoint.length >= 2) {
+              // Calculate bearing in degrees from prevPoint to newestPoint
+              const toRad = deg => deg * Math.PI / 180;
+              const toDeg = rad => rad * 180 / Math.PI;
+              const [lon1, lat1] = [prevPoint[0], prevPoint[1]];
+              const [lon2, lat2] = [newestPoint[0], newestPoint[1]];
+              const dLon = toRad(lon2 - lon1);
+              const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+              const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+                        Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+              bearing = (toDeg(Math.atan2(y, x)) + 360) % 360;
+            }
+          }
+          if (Array.isArray(newestPoint) && newestPoint.length >= 2) {
+            // If altitude is available, use it for position
+            let position = undefined;
+            if (newestPoint.length >= 3 && typeof newestPoint[2] === 'number') {
+              position = [newestPoint[0], newestPoint[1], newestPoint[2] + 30];
+            }
+            // --- Only update if position changed significantly ---
+            let skipUpdate = false;
+            if (currentViewState && typeof currentViewState.longitude === 'number' && typeof currentViewState.latitude === 'number') {
+              const dx = newestPoint[0] - currentViewState.longitude;
+              const dy = newestPoint[1] - currentViewState.latitude;
+              const dist = Math.sqrt(dx*dx + dy*dy);
+              if (dist < 0.00001) skipUpdate = true;
+            }
+            if (!skipUpdate) {
+              // Smooth bearing transition
+              newViewState = {
+                longitude: newestPoint[0],
+                latitude: newestPoint[1],
+                zoom: currentViewState?.zoom || deckGL.props.initialViewState.zoom,
+                pitch: currentViewState?.pitch || deckGL.props.initialViewState.pitch,
+                bearing: bearing,
+                transitionDuration: 500
+              };
+            }
+          }
+        }
+      }
+      deckGL.setProps({
+        layers: updateInteractionLayers([
+          terrainLayer,
+          updatedPathLayer,
+          deckGL.props.layers[2], // first predicted
+          deckGL.props.layers[3], // second predicted
+          deckGL.props.layers[4], // targetArea
+          updatedCurrentPositionLayer
+        ])
+      });
+      if (newViewState) {
+        currentViewState = {...currentViewState, ...newViewState};
+        deckGL.setProps({ viewState: currentViewState });
+      }
+    });
+    socket.on('predicted_path_updated', (data) => {
+      // Update predicted path layer
+      const { firstData, secondData } = splitPredicted(data.predicted_path);
+      const updatedPredictedFirstLayer  = predictedPathFirstLayer.clone({  data: firstData  });
+      const updatedPredictedSecondLayer = predictedPathSecondLayer.clone({ data: secondData });
+      deckGL.setProps({
+        layers: updateInteractionLayers([
+          deckGL.props.layers[0], // terrain
+          deckGL.props.layers[1], // path
+          updatedPredictedFirstLayer,
+          updatedPredictedSecondLayer,
+          deckGL.props.layers[4], // targetArea
+          deckGL.props.layers[5]  // currentPosition
+        ])
+      });
+    });
+    socket.on('target_area_updated', (data) => {
+      // Update target area layer
+      const updatedTargetAreaLayer = targetAreaLayer.clone({ data: data.target_area && data.target_area.geometry ? data.target_area : {} });
+      deckGL.setProps({
+        layers: updateInteractionLayers([
+          deckGL.props.layers[0], // terrainLayer
+          deckGL.props.layers[1], // pathLayer
+          deckGL.props.layers[2], // predictedPathFirstLayer
+          deckGL.props.layers[3], // predictedPathSecondLayer
+          updatedTargetAreaLayer,
+          deckGL.props.layers[5]  // currentPositionLayer
+        ])
+      });
+    });
+
+    // --- Listen for heli_position event and update red dot layer ---
+    socket.on('heli_position', (data) => {
+      if (data && Array.isArray(data.position) && data.position.length >= 3) {
+        heliPositionData = [{ position: data.position }];
+        // Update only the red dot layer, keep other layers unchanged
+        const layers = deckGL.props.layers.map(l =>
+          l.id === 'heli-position-layer'
+            ? heliPositionLayer.clone({ data: heliPositionData })
+            : l
+        );
+        deckGL.setProps({ layers });
+      }
+    });
+
+    // --- Polygon Controls ---
+    document.getElementById('finishPolygonBtn').addEventListener('click', () => {
+      if (polygonPoints.length < 3) {
+        alert('Need at least 3 points to form a polygon.');
+        return;
+      }
+      drawingLocked = true;
+      document.getElementById('polygon-controls').style.display = 'none';
+      // Save as GeoJSON (closed ring)
+      const ring = [...polygonPoints, polygonPoints[0]];
+      const geojson = {
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          geometry: { type: 'Polygon', coordinates: [ring] }
+        }]
+      };
+      // Send to server instead of downloading
+      fetch('http://127.0.0.1:5000/upload_polygon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(geojson)
+      })
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to upload polygon');
+        return res.json();
+      })
+      .then(data => {
+        console.log('Polygon uploaded:', data);
+      })
+      .catch(err => {
+        alert('Failed to upload polygon: ' + err.message);
+      });
+    });
+
+    document.getElementById('resetPolygonBtn').addEventListener('click', () => {
+      polygonPoints = [];
+      drawingLocked = false;
+      document.getElementById('polygon-controls').style.display = 'block';
+      deckGL.setProps({ layers: updateInteractionLayers(deckGL.props.layers) });
+    });
+
+    // new helper to detect & load saved polygon
+    function checkExistingPolygon() {
+      fetch('polygon.geojson')
+        .then(res => {
+          if (!res.ok) throw new Error('no polygon');
+          return res.json();
+        })
+        .then(geojson => {
+          drawingLocked = true;
+          document.getElementById('polygon-controls').style.display = 'none';
+          const updatedTarget = targetAreaLayer.clone({ data: geojson });
+          deckGL.setProps({
+            layers: updateInteractionLayers([
+              terrainLayer,
+              pathLayer,
+              predictedPathFirstLayer,
+              predictedPathSecondLayer,
+              updatedTarget,
+              currentPositionLayer
+            ])
+          });
+        })
+        .catch(() => {
+          // no saved polygon → leave controls visible
+        });
+    }
+
+    // Update terrain layer style
+    function updateMapStyle(newStyle) {
+      currentMapStyle = newStyle;
+      terrainLayer = terrainLayer.clone({
+        texture: getTextureUrl(currentMapStyle)
+      });
+      // Update layers in deckGL
+      if (deckGL) {
+        // Replace terrainLayer in the layers array
+        const layers = deckGL.props.layers.map(l =>
+          l.id === 'terrain-layer' ? terrainLayer : l
+        );
+        deckGL.setProps({ layers });
+      }
+    }
+
+    // Listen for style changes
+    document.getElementById('mapStyleSelect').addEventListener('change', function() {
+      updateMapStyle(this.value);
+    });
+  </script>
+</body>
+</html>

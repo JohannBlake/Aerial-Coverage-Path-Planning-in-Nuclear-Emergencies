@@ -1,0 +1,11 @@
+entity: johanndavidblake-ludwig-maximilianuniversity-of-munich
+method: grid
+metric:
+  goal: maximize
+  name: reward
+parameters: # SWEEP VALUES NO LONGER OVERWRITE DEFAULTS
+  sweep_info:
+    values:
+      - 'super high gamma. replay biuffer back upppp'
+program: train.py
+project: Heli-Logs

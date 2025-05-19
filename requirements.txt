@@ -1,0 +1,25 @@
+numpy==1.26.4
+plotly
+pandas
+geopandas
+matplotlib
+scipy
+scikit-learn
+shapely
+plotly
+geopy
+scikit-image
+stable_baselines3
+sb3_contrib
+wandb
+psutil
+kaleido
+gymnasium
+rasterio
+opencv-python
+dill
+pygame
+pyproj
+numba
+cupy
+#safety_gymnasium omnisafe gymnasium installed via omnisafe repo in bash script
