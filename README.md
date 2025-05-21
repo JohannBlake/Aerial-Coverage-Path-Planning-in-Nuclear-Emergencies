@@ -1,3 +1,5 @@
+![Radiation Scenario](radiation_szenario.png)
+
 # Simulation Environment for Radiation Mapping with UAV
 
 This repository provides a simulation environment for evaluating UAV/Helicopter strategies in mapping radiation over a geographic area, designed for reinforcement learning and compatible with Gymnasium.
